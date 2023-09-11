@@ -1,0 +1,65 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+# hist_data_withoutdups.log from all of the samples to generate histograms of fragment size distributions & summary violin plots. <updated 9142022, due to janky code written 2 years ago>
+```{r}
+setwd("/lustre/fs4/risc_lab/scratch/jsoroczyns/CAD/Exp_001/20230822_JS_CAD_Digest/PipelineOutput")
+samplesNames <-dir(pattern="CADC") # make vector of sample names (folder for each sample that gets produced from fastq2bam pipeline)
+samplesList <- list()
+for(i in 1:length(samplesNames)){
+  samplesList[[i]] <- read.table(paste0(samplesNames[i],"/", samplesNames[i], "_hist_data_withoutdups.log"), skip=10, header=T) # read in hist_data_withoutdups.log file for each sample
+}
+names(samplesList) <- samplesNames
+
+# want each sample to have the same value of insert sizes from 1-1000bp (we don't want missing insert sizes because then it is hard to plot on ggplot if different samples have different axes. We will fill in the insert sizes with no reads as NA. 
+for(i in 1:length(samplesList)){
+  hist <- data.frame(insert_size=1:1000) 
+  samplesList[[i]] <- merge(hist, samplesList[[i]], by="insert_size", all=T)
+} 
+final_hist <- do.call(rbind, samplesList) # rbind each samples' histogram dataframe into 1 final dataframe. 
+final_hist$samples <- unlist(lapply(samplesNames, rep, 1000)) # specify samples column so that we can color ggplot by sample. 
+```
+
+```{r}
+library(ggplot2)
+pdf("FLD_CADC.pdf", height=8, width=10)
+# ggplot fragment length distribution histogram: 
+ggplot(final_hist, aes(x=insert_size, y=All_Reads.fr_count, colour=samples)) + 
+  geom_line(size=0.5) + 
+  scale_colour_brewer(palette="Spectral") +
+   theme_bw(base_size = 10) + 
+  ylab("Count") + 
+  ggtitle("Fragment Length Distribution of all Samples") + 
+  theme(legend.position="bottom")
+
+# ggplot fragment length distribution histogram, log10 transformed: 
+ggplot(final_hist, aes(x=insert_size, y=log10(All_Reads.fr_count), colour=samples)) + 
+  geom_line(size=0.5) + 
+  scale_colour_brewer(palette="Spectral") +
+   theme_bw(base_size = 10) + 
+  ylab("log10 Count") + 
+  ggtitle("Fragment Length Distribution of all Samples") + 
+  theme(legend.position="bottom")
+
+# ggplot fragment length distribution violin plot: 
+ggplot(final_hist, aes(x=samples, y=insert_size, weight=All_Reads.fr_count, fill=samples)) + geom_violin(bw=5) +
+  scale_fill_brewer(palette="Spectral") + 
+  theme_bw(base_size=10) + 
+  ylab("Insert Size") + 
+  ggtitle("Fragment Length Distribution of all Samples") + 
+  scale_y_continuous(breaks = seq(0, 1000, 50)) + 
+  theme(legend.position="bottom")
+dev.off()
+```

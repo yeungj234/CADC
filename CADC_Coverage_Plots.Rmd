@@ -1,0 +1,363 @@
+---
+title: "CADC_Coverage_Plots"
+author: "Joanna Yeung"
+date: '2023-08-24'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### merge replicate bam files into 1 final bam file
+```{sh, eval=F}
+conda activate fastq2bam
+
+samtools merge -r /lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam /lustre/fs4/risc_lab/scratch/jsoroczyns/CAD/Exp_001/20230822_JS_CAD_Digest/PipelineOutput/CADC_E1_8_Digest_TR4/CADC_E1_8_Digest_TR4_S47_001.trim.st.all.blft.qft.rmdup.bam /lustre/fs4/risc_lab/scratch/jsoroczyns/CAD/Exp_001/20230822_JS_CAD_Digest/PipelineOutput/CADC_E1_5_Digest_TR1/CADC_E1_5_Digest_TR1_S44_001.trim.st.all.blft.qft.rmdup.bam /lustre/fs4/risc_lab/scratch/jsoroczyns/CAD/Exp_001/20230822_JS_CAD_Digest/PipelineOutput/CADC_E1_6_Digest_TR2/CADC_E1_6_Digest_TR2_S45_001.trim.st.all.blft.qft.rmdup.bam /lustre/fs4/risc_lab/scratch/jsoroczyns/CAD/Exp_001/20230822_JS_CAD_Digest/PipelineOutput/CADC_E1_7_Digest_TR3/CADC_E1_7_Digest_TR3_S46_001.trim.st.all.blft.qft.rmdup.bam
+```
+
+```{r}
+library(soGGi)
+library(profileplyr)
+library(rtracklayer)
+library(ggplot2)
+library(viridis)
+
+genes <- import("/lustre/fs4/risc_lab/store/jyeung/references/gencode.v41.GRCh38.p13.annotation.gtf") # import gencode database
+
+# get coordinates of TSS by fixing genes to 1st bp
+TSS <- resize(genes[genes$type %in% "gene", ], fix="start", width=1)
+# resize TSS region into 1500 bp downstream & upstream of start. This is the area we will get coverage of
+TSS <- resize(TSS, fix="center", width=3000)
+export.gff3(TSS, "/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/TSS_1500bpupanddown.gff")
+
+# plot coverage around TSS using soGGi package: 
+# generate ChIPprofile object as input for plotRegion function. 
+TSS_signal <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=TSS)
+
+
+# plot Coverage around TSS
+plotRegion(TSS_signal, colourBy = "Sample")+ggtitle("Read Coverage around TSS")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+```
+
+
+### plot coverage under TSS with different fragment lengths
+```{r}
+# mononucleosome coverage
+TSS_signal_140to240 <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=TSS, paired = TRUE, minFragmentLength = 140, maxFragmentLength = 240)
+
+plotRegion(TSS_signal_140to240, colourBy = "Sample")+ggtitle("Read Coverage around TSS:140-240bp Fragment Length")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+# nucleosome free coverage
+TSS_signal_0to139 <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=TSS, paired = TRUE, minFragmentLength = 0, maxFragmentLength = 139)
+
+plotRegion(TSS_signal_0to139, colourBy = "Sample")+ggtitle("Read Coverage around TSS: 0-139bp Fragment Length")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+```
+
+### save TSS coverage plots made by soGGi package to pdf
+```{r}
+setwd("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan")
+pdf("TSS_coverage_CADC_soGGi.pdf", width=10, height=8)
+
+plotRegion(TSS_signal, colourBy = "Sample")+ggtitle("Read Coverage around TSS")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(TSS_signal_0to139, colourBy = "Sample")+ggtitle("Read Coverage around TSS: 0-139bp Fragment Length")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(TSS_signal_140to240, colourBy = "Sample")+ggtitle("Read Coverage around TSS:140-240bp Fragment Length")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+dev.off()
+```
+
+```{r}
+setwd("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan")
+# with soGGi output, convert it to profileplyr object
+
+proplyrObject <- lapply(list(TSS_signal, TSS_signal_0to139, TSS_signal_140to240), as_profileplyr)
+
+# export into matrix object for input into DeepTools
+export_deepToolsMat(c(proplyrObject[[1]]), con = "TSS_heatmap_allfrag_CADC.MAT.gz", overwrite = T)
+export_deepToolsMat(c(proplyrObject[[2]]), con = "TSS_heatmap_0to139bp_CADC.MAT.gz", overwrite = T)
+export_deepToolsMat(c(proplyrObject[[3]]), con = "TSS_heatmap_140to240bp_CADC.MAT.gz", overwrite = T)
+```
+
+##### plot heatmap of coverage around TSS sites using DeepTools on command line, under ATACseq conda env
+```{sh, eval=F}
+source activate ATACseq
+
+plotHeatmap -m TSS_heatmap_allfrag_CADC.MAT.gz -out TSS_heatmap_allfrag_CADC.MAT.pdf --samplesLabel TSS_all_fragments
+
+plotHeatmap -m TSS_heatmap_0to139bp_CADC.MAT.gz -out TSS_heatmap_0to139bp_CADC.MAT.pdf --samplesLabel TSS_0to139bp
+
+plotHeatmap -m TSS_heatmap_140to240bp_CADC.MAT.gz -out TSS_heatmap_140to240bp_CADC.MAT.pdf --samplesLabel TSS_140to240bp
+```
+
+### replot coverage around TSS within 100bp window
+```{r}
+TSS <- resize(TSS, fix="center", width=200)
+
+# plot coverage around TSS using soGGi package: 
+# generate ChIPprofile object as input for plotRegion function. 
+TSS_signal_100 <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=TSS, distanceUp = 100, distanceDown = 100)
+
+TSS_signal_100to240_100 <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=TSS, paired = TRUE, minFragmentLength = 100, maxFragmentLength = 240, distanceUp = 100, distanceDown = 100)
+
+# nucleosome free coverage
+TSS_signal_0to100_100 <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=TSS, paired = TRUE, minFragmentLength = 0, maxFragmentLength = 100, distanceUp = 100, distanceDown = 100)
+
+# plot Coverage around TSS for all types of coverages
+TSS_signal_all_smallwindow <- c(TSS_signal_100, TSS_signal_0to100_100, TSS_signal_100to240_100)
+
+TSS_signal_all_smallwindow@metadata[["names"]] <- c("all", "100bp or less", "100bp to 240bp") # assign sample names so we can colourBy = "Sample"
+```
+### plot coverage around TSS within 100bp window and save to pdf. 
+```{r}
+setwd("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan")
+pdf("TSS_100bpwindow_coverage_CADC_soGGi.pdf", width=10, height=8)
+# plot Coverage around TSS within 100bp window
+plotRegion(TSS_signal_100, colourBy = "Sample")+ggtitle("Read Coverage around TSS")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(TSS_signal_100to240_100, colourBy = "Sample")+ggtitle("Read Coverage around TSS 100 to 240bp")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(TSS_signal_0to100_100, colourBy = "Sample")+ggtitle("Read Coverage around TSS 0 to 100bp")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+dev.off()
+
+proplyr_TSS <- lapply(list(TSS_signal_100, TSS_signal_0to100_100, TSS_signal_100to240_100), as_profileplyr)
+
+export_deepToolsMat(c(proplyr_TSS[[1]], proplyr_TSS[[2]], proplyr_TSS[[3]]), con = "TSS_heatmap_100bpwindow_CADC.MAT.gz", overwrite = T)
+```
+
+```{sh}
+source activate ATACseq
+cd /lustre/fs4/risc_lab/scratch/jyeung/For_Jan
+plotHeatmap -m TSS_heatmap_100bpwindow_CADC.MAT.gz -out TSS_heatmap_100bpwindow_CADC.pdf --samplesLabel all TSS_100bporless TSS_100to240bp --colorMap inferno --zMin 0 0 0 --zMax 4 0.0000000001 2
+```
+
+### plot coverage under CTCF sites
+```{r}
+# import CTCF narrowPeak file downloaded from ENCODE
+CTCF_sites <- import("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/ENCFF409DTL_CTCF_ChIP_RPE.bed", format="narrowPeak")
+
+# get coverage under CTCF sites & plot
+CTCF_signal <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=CTCF_sites, paired = TRUE)
+
+plotRegion(CTCF_signal, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+```
+
+### plot coverage under CTCF with different fragment lengths
+```{r}
+CTCF_0to139bp <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=CTCF_sites, paired = TRUE, minFragmentLength = 0, maxFragmentLength = 139)
+
+CTCF_140to240bp <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=CTCF_sites, paired = TRUE, minFragmentLength = 140, maxFragmentLength = 240)
+
+plotRegion(CTCF_0to139bp, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF: 0-139bp Fragments")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(CTCF_140to240bp, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF: 140-240bp Fragments")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+```
+
+### save CTCF coverage plots made by soGGi package to pdf
+```{r}
+setwd("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan")
+pdf("CTCF_coverage_CADC_soGGi.pdf", width=10, height=8)
+plotRegion(CTCF_signal, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(CTCF_0to139bp, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF: 0-139bp Fragments")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(CTCF_140to240bp, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF: 140-240bp Fragments")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+dev.off()
+```
+
+```{r}
+# with soGGi output, convert it to profileplyr object
+
+proplyr_CTCF <- lapply(list(CTCF_signal, CTCF_0to139bp, CTCF_140to240bp), as_profileplyr)
+
+# export into matrix object for input into DeepTools
+export_deepToolsMat(c(proplyr_CTCF[[1]]), con = "CTCF_heatmap_allfrag_CADC.MAT.gz", overwrite = T)
+export_deepToolsMat(c(proplyr_CTCF[[2]]), con = "CTCF_heatmap_0to139bp_CADC.MAT.gz", overwrite = T)
+export_deepToolsMat(c(proplyr_CTCF[[3]]), con = "CTCF_heatmap_140to240bp_CADC.MAT.gz", overwrite = T)
+```
+
+##### plot heatmap of coverage around CTCF sites using DeepTools on command line, under ATACseq conda env
+```{sh, eval=F}
+source activate ATACseq
+
+plotHeatmap -m CTCF_heatmap_allfrag_CADC.MAT.gz -out CTCF_heatmap_allfrag_CADC.MAT.pdf --samplesLabel CTCF_all_fragments 
+
+plotHeatmap -m CTCF_heatmap_0to139bp_CADC.MAT.gz -out CTCF_heatmap_0to139bp_CADC.MAT.pdf --samplesLabel CTCF_0to139bp 
+
+plotHeatmap -m CTCF_heatmap_140to240bp_CADC.MAT.gz -out CTCF_heatmap_140to240bp_CADC.MAT.pdf --samplesLabel CTCF140to240bp
+```
+
+### replot CTCF coverage with asymmetry included 
+```{r}
+# import CTCF narrowPeak file downloaded from ENCODE
+CTCF_sites <- import.bed("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/RPE1_occupied_CTCF_motifs.bed")
+
+# get coverage under CTCF sites within 1.5kb window 
+CTCF_signal_stranded <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=CTCF_sites, paired = TRUE)
+
+CTCF_signal_stranded_100bporless <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=CTCF_sites, paired = TRUE, minFragmentLength = 0, maxFragmentLength = 100)
+
+CTCF_signal_stranded_100bpto240bp <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=CTCF_sites, paired = TRUE, minFragmentLength = 100, maxFragmentLength = 240)
+
+# plot Coverage around CTCF for all types of coverages
+CTCF_stranded_all <- c(CTCF_signal_stranded, CTCF_signal_stranded_100bporless, CTCF_signal_stranded_100bpto240bp)
+
+CTCF_stranded_all@metadata[["names"]] <- c("all", "100bp or less", "100bp to 240bp") # assign sample names so we can colourBy = "Sample" 
+# get coverage under CTCF sites within 100bp window 
+```
+
+### get coverage under CTCF sites within 100bp window 
+```{r}
+# all fragments
+CTCF_signal_stranded_smallwindow <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=CTCF_sites, paired = TRUE, distanceUp = 100, distanceDown = 100)
+
+# fragments less than 100bp
+CTCF_signal_stranded_100bporless_smallwindow <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=CTCF_sites, paired = TRUE, minFragmentLength = 0, maxFragmentLength = 100, distanceUp = 100, distanceDown = 100)
+
+# fragments between 100-240bp 
+CTCF_signal_stranded_100bpto240bp_smallwindow <-  regionPlot("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam", testRanges=CTCF_sites, paired = TRUE, minFragmentLength = 100, maxFragmentLength = 240, distanceUp = 100, distanceDown = 100)
+
+# plot Coverage around CTCF for all types of coverages
+CTCF_stranded_all_smallwindow <- c(CTCF_signal_stranded_smallwindow, CTCF_signal_stranded_100bporless_smallwindow, CTCF_signal_stranded_100bpto240bp_smallwindow)
+
+CTCF_stranded_all_smallwindow@metadata[["names"]] <- c("all", "100bp or less", "100bp to 240bp") # assign sample names so we can colourBy = "Sample" 
+```
+
+### plot coverage under CTCF sites around 1.5kb and 100bp window around motif and save to pdf. 
+```{r}
+setwd("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan")
+pdf("CTCF_coverage_CADC_asymmetry_soGGi.pdf", width=10, height=8)
+plotRegion(CTCF_signal_stranded, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(CTCF_signal_stranded_100bporless, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF 100bp or less")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(CTCF_signal_stranded_100bpto240bp, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF 100bp to 240bp")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(CTCF_stranded_all, colourBy = "Sample")+ggtitle("Read Coverage around CTCF")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(CTCF_signal_stranded_smallwindow, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF (100bp window)")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(CTCF_signal_stranded_100bporless_smallwindow, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF 100bp or less (100bp window)")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(CTCF_signal_stranded_100bpto240bp_smallwindow, colourBy = "Sample", freeScale = T)+ggtitle("Read Coverage around CTCF 100bp to 240bp (100bp window)")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+
+plotRegion(CTCF_stranded_all_smallwindow, colourBy = "Sample")+ggtitle("Read Coverage around CTCF")+theme_classic()+ scale_color_viridis(discrete = TRUE, begin = 0.1, end = 0.9, option = "magma")
+dev.off()
+```
+
+### export coverage matrix to plot heatmap using deepTools 
+```{r}
+CTCF_plyr <- lapply(list(CTCF_signal_stranded, CTCF_signal_stranded_100bporless, CTCF_signal_stranded_100bpto240bp, CTCF_signal_stranded_smallwindow, CTCF_signal_stranded_100bporless_smallwindow, CTCF_signal_stranded_100bpto240bp_smallwindow), as_profileplyr)
+
+# export into matrix object for input into DeepTools
+export_deepToolsMat(c(CTCF_plyr[[1]]), con = "CTCF_heatmap_all_asymmetry_CADC.MAT.gz", overwrite = T)
+export_deepToolsMat(c(CTCF_plyr[[2]]), con = "CTCF_heatmap_0to100bp_asymmetry_CADC.MAT.gz", overwrite = T)
+export_deepToolsMat(c(CTCF_plyr[[3]]), con = "CTCF_heatmap_100to240bp_asymmetry_CADC.MAT.gz", overwrite = T)
+export_deepToolsMat(c(CTCF_plyr[[4]]), con = "CTCF_heatmap_asymmetry_100bpwindow_CADC.MAT.gz", overwrite = T)
+export_deepToolsMat(c(CTCF_plyr[[5]]), con = "CTCF_heatmap_0to100bp_asymmetry_100bpwindow_CADC.MAT.gz", overwrite = T)
+export_deepToolsMat(c(CTCF_plyr[[6]]), con = "CTCF_heatmap_100to240bp_asymmetry_100bpwindow_CADC.MAT.gz", overwrite = T)
+
+export_deepToolsMat(c(CTCF_plyr[[4]], CTCF_plyr[[5]], CTCF_plyr[[6]]), con = "CTCF_heatmap_allmat_100bpwindow_CADC.MAT.gz", overwrite = T)
+```
+
+##### plot heatmap of coverage around CTCF sites using DeepTools on command line, under ATACseq conda env
+```{sh, eval=F}
+source activate ATACseq
+cd /lustre/fs4/risc_lab/scratch/jyeung/For_Jan
+
+plotHeatmap -m CTCF_heatmap_all_asymmetry_CADC.MAT.gz -out CTCF_heatmap_all_asymmetry_CADC.pdf --samplesLabel CTCF_all_fragments --zMin 0 --zMax 1.6 --colorMap inferno
+
+plotHeatmap -m CTCF_heatmap_0to100bp_asymmetry_CADC.MAT.gz -out CTCF_heatmap_0to100bp_asymmetry_CADC.pdf --samplesLabel CTCF_0to100bp --colorMap inferno --zMin 0 --zMax 0.5
+
+plotHeatmap -m CTCF_heatmap_100to240bp_asymmetry_CADC.MAT.gz -out CTCF_heatmap_100to240bp_asymmetry_CADC.pdf --samplesLabel CTCF_100to240bp --colorMap inferno --zMin 0 --zMax 1
+
+plotHeatmap -m CTCF_heatmap_allmat_100bpwindow_CADC.MAT.gz -out CTCF_heatmap_allmat_100bpwindow_CADC.pdf --samplesLabel all CTCF_100bporless CTCF_100to240bp --colorMap inferno 
+```
+
+### plot coverage of different fragment sizes across the genome 
+```{r, warnings=F}
+library(GenomicAlignments)
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+setwd("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan")
+# read in pair-end bam file
+CAD_bam <- GenomicAlignments::readGAlignmentPairs("CADC_final_merged.bam")
+summary(width(ranges(CAD_bam))) # summary of fragment lengths in bam file 
+# convert GAlignments to GRanges
+CAD_bam_GR <- granges(CAD_bam)
+# subset for fragment lengths 100bp or less
+CAD_bam_100bporless <- CAD_bam_GR[width(CAD_bam_GR) <= 100, ]
+CAD_bam_100bporless
+# subset for fragment lengths between 140 to 240bp
+CAD_bam_100to240bp <- CAD_bam_GR[width(CAD_bam_GR) > 100 & width(CAD_bam_GR) <= 240, ]
+
+# annotate where fragments lie and plot with ChIPseeker. 
+CAD_bam_100bporless_anno <- annotatePeak(CAD_bam_100bporless, TxDb=TxDb.Hsapiens.UCSC.hg38.knownGene)
+plotAnnoPie(CAD_bam_100bporless_anno, main="CAD 100bp or less fragment size")
+
+CAD_bam_140to240bp_anno <- annotatePeak(CAD_bam_140to240bp, TxDb=TxDb.Hsapiens.UCSC.hg38.knownGene)
+plotAnnoPie(CAD_bam_140to240bp_anno)
+
+# plot coverage across chromosomes
+CAD_bam_100bporless_cov <- ChIPseeker::covplot(CAD_bam_100bporless, title="100bp or less fragment size")
+CAD_bam_140to240bp_cov <- ChIPseeker::covplot(CAD_bam_140to240bp, title="140 to 240bp fragment size")
+
+# save to pdf 
+pdf("CADC_anno.pdf", width=5, height=5)
+plotAnnoPie(CAD_bam_100bporless_anno, main="CAD 100bp or less fragment size")
+plotAnnoPie(CAD_bam_140to240bp_anno, main="CAD 140 to 240bp fragment size")
+dev.off()
+pdf("CADC_chromosome_cov.pdf", width=10, height=14)
+CAD_bam_100bporless_cov
+CAD_bam_140to240bp_cov
+dev.off()
+```
+
+### double check that fragment length I got from GenomicAlignmentPairs makes sense, via with a different package
+```{r}
+library(csaw)
+CAD_PEsize <- getPESizes("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan/CADC_final_merged.bam")
+length(CAD_PEsize$sizes <=100) # the number of fragments less or = to 100bp matches with CAD_bam_100bporless so it does make sense. 
+```
+
+### compute GC bias in CADC data using deepTools
+```{sh}
+source activate ATACseq
+cd /lustre/fs4/risc_lab/scratch/jyeung/For_Jan/
+computeGCBias -b CADC_final_merged.bam --effectiveGenomeSize 2701495761 -g /lustre/fs4/risc_lab/store/jyeung/references/hg38.2bit --GCbiasFrequenciesFile CAD_GCBiasfreq.txt --biasPlot CAD_GC.png
+ 
+correctGCBias -b CADC_final_merged.bam --effectiveGenomeSize 2701495761 -g /lustre/fs4/risc_lab/store/jyeung/references/hg38.2bit --GCbiasFrequenciesFile CAD_GCBiasfreq.txt -o CAD_gc_corrected.bam
+```
+
+### plot coverage over ATACseq peaks 
+```{r}
+setwd("/lustre/fs4/risc_lab/scratch/jyeung/For_Jan")
+# import ATACseq master peak set that Jan gave me that Justin gave him 
+ATACpeaks <- import.bed("RPE1_5112022_WT_PooledInRep1AndRep2.filt.narrowPeak.sorted.merged.bed")
+
+# resize peaks to be fixed width
+ATACpeaks_fw <- resize(ATACpeaks, width = 500, fix="center")
+
+# get coverage around ATACseq peaks
+ATAC_signal <-  regionPlot("CADC_final_merged.bam", testRanges=ATACpeaks_fw, paired = TRUE) # all fragment sizes
+ATAC_signal_100bporless <- regionPlot("CADC_final_merged.bam", testRanges=ATACpeaks_fw, paired = TRUE, minFragmentLength = 0, maxFragmentLength = 100) # 100bp or less
+ATAC_signal_100to240bp <- regionPlot("CADC_final_merged.bam", testRanges=ATACpeaks_fw,paired = TRUE, minFragmentLength = 100, maxFragmentLength = 240) # 100 to 240bp 
+
+# plot Coverage around ATAC peaks
+pdf("CADC_ATACsignal_coverage.pdf", width=10, height=8)
+plotRegion(ATAC_signal)+ggtitle("Read Coverage around ATAC-seq peaks")+theme_classic()
+plotRegion(ATAC_signal_100bporless)+ggtitle("Read Coverage around ATAC-seq peaks: 100bp or less fragment size")+theme_classic()
+plotRegion(ATAC_signal_100to240bp)+ggtitle("Read Coverage around ATAC-seq peaks: 100 to 240bp fragment size")+theme_classic()
+dev.off()
+
+# find % of fragments 100bp or less overlapping ATAC-seq peaks
+length(CAD_bam_100bporless[CAD_bam_100bporless %over% ATACpeaks])/length(CAD_bam_100bporless)
+# find % of fragments 140bp to 240bp overlapping ATAC-seq peaks
+length(CAD_bam_100to240bp[CAD_bam_100to240bp %over% ATACpeaks])/length(CAD_bam_100to240bp)
+```
+
+```{r}
+sessionInfo()
+```
